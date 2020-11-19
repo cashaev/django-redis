@@ -24,7 +24,7 @@ herd.CACHE_HERD_TIMEOUT = 2
 
 
 def make_key(key, prefix, version):
-    return "{}#{}#{}".format(prefix, version, key)
+    return f"{prefix}#{version}#{key}"
 
 
 def reverse_key(key):
@@ -323,13 +323,18 @@ class DjangoRedisCacheTests(unittest.TestCase):
 
         with patch.object(pipeline, "set") as mocked_set:
             self.cache.set(
-                key, value, client=pipeline,
+                key,
+                value,
+                client=pipeline,
             )
 
         if isinstance(self.cache.client, herd.HerdClient):
             default_timeout = self.cache.client._backend.default_timeout
             herd_timeout = (default_timeout + herd.CACHE_HERD_TIMEOUT) * 1000
-            herd_pack_value = self.cache.client._pack(value, default_timeout,)
+            herd_pack_value = self.cache.client._pack(
+                value,
+                default_timeout,
+            )
             mocked_set.assert_called_once_with(
                 self.cache.client.make_key(key, version=None),
                 self.cache.client.encode(herd_pack_value),
@@ -604,6 +609,31 @@ class DjangoRedisCacheTests(unittest.TestCase):
         self.cache.expire("foo", 20)
         ttl = self.cache.ttl("foo")
         self.assertAlmostEqual(ttl, 20)
+
+    def test_expire_at(self):
+
+        # Test settings expiration time 1 hour ahead by datetime.
+        self.cache.set("foo", "bar", timeout=None)
+        expiration_time = datetime.datetime.now() + timedelta(hours=1)
+        self.cache.expire_at("foo", expiration_time)
+        ttl = self.cache.ttl("foo")
+        self.assertAlmostEqual(ttl, timedelta(hours=1).total_seconds(), delta=1)
+
+        # Test settings expiration time 1 hour ahead by Unix timestamp.
+        self.cache.set("foo", "bar", timeout=None)
+        expiration_time = datetime.datetime.now() + timedelta(hours=2)
+        self.cache.expire_at("foo", int(expiration_time.timestamp()))
+        ttl = self.cache.ttl("foo")
+        self.assertAlmostEqual(ttl, timedelta(hours=1).total_seconds() * 2, delta=1)
+
+        """
+        Test settings expiration time 1 hour in past, which
+        effectively deletes the key.
+        """
+        expiration_time = datetime.datetime.now() - timedelta(hours=2)
+        self.cache.expire_at("foo", expiration_time)
+        value = self.cache.get("foo")
+        self.assertIsNone(value)
 
     def test_lock(self):
         lock = self.cache.lock("foobar")
